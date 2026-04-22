@@ -56,7 +56,7 @@ The skill is described broadly so Claude invokes it whenever a task would natura
 ## Further reading
 
 - [rails/rails#57156](https://github.com/rails/rails/pull/57156) — the PR that added `rails query` to Rails 8.2. Read this for the full design, rationale, and command surface.
-- [Kamal aliases](https://kamal-deploy.org) — for wiring `bin/kamal query` to `rails query` on deployed environments.
+- [Kamal `app` commands](https://kamal-deploy.org/docs/commands/app/) — for wiring `bin/kamal query` to `rails query` on deployed environments.
 
 ## Contributing
 

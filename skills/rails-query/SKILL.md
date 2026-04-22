@@ -341,4 +341,4 @@ This means you can safely run `rails query` against production without worrying 
 ## Further reading
 
 - Rails source: `railties/lib/rails/commands/query/query_command.rb` in the Rails repo
-- Kamal aliases: https://kamal-deploy.org
+- Kamal `app` commands: https://kamal-deploy.org/docs/commands/app/
