@@ -1,0 +1,13 @@
+{
+  "name": "rails-query",
+  "version": "0.1.0",
+  "description": "Run read-only queries against a Rails 8.2+ app's database via `rails query` — ActiveRecord or SQL, schema/model introspection, EXPLAIN, pagination, and remote execution via Kamal.",
+  "author": {
+    "name": "Lewis Buckley",
+    "url": "https://github.com/lewispb"
+  },
+  "homepage": "https://github.com/lewispb/rails-query-skill",
+  "repository": "https://github.com/lewispb/rails-query-skill",
+  "license": "MIT",
+  "keywords": ["rails", "rails-8.2", "database", "query", "activerecord", "kamal", "read-only", "sql"]
+}
