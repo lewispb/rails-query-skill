@@ -22,13 +22,17 @@ The skill covers:
 
 ## Installation
 
+This repository is both the plugin and a single-plugin marketplace, so you can install it directly without waiting for Anthropic marketplace approval.
+
 From inside Claude Code:
 
 ```
-/plugin install rails-query
+/plugin marketplace add lewispb/rails-query-skill
+/plugin install rails-query@rails-query-skill
+/reload-plugins
 ```
 
-Or install from this repository directly via a marketplace config.
+The first command registers this repo as a marketplace; the second installs the plugin; the third picks it up without restarting. The plugin will also be submitted to the official Anthropic marketplace — once approved, a shorter `/plugin install rails-query@claude-plugins-official` will work too.
 
 ## Requirements
 

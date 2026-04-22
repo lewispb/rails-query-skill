@@ -1,0 +1,14 @@
+{
+  "name": "rails-query-skill",
+  "owner": {
+    "name": "Lewis Buckley",
+    "url": "https://github.com/lewispb"
+  },
+  "plugins": [
+    {
+      "name": "rails-query",
+      "source": "./",
+      "description": "Run read-only queries against a Rails 8.2+ app's database via `rails query` — ActiveRecord or SQL, schema introspection, EXPLAIN, local or remote via Kamal."
+    }
+  ]
+}
