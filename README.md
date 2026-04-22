@@ -1,6 +1,6 @@
 # rails-query
 
-A Claude Code plugin that teaches Claude to answer data questions about a Rails 8.2+ application using the `rails query` command — locally or against a deployed environment via Kamal.
+A Claude Code plugin that teaches Claude to answer data questions about a Rails 8.2+ application using the [`rails query`](https://github.com/rails/rails/pull/57156) command — locally or against a deployed environment via Kamal.
 
 ## What it does
 
@@ -52,6 +52,11 @@ The skill is described broadly so Claude invokes it whenever a task would natura
 > "What's in the `mailboxes` table?"
 
 > "Explain this query: `Post.published.limit(100)`"
+
+## Further reading
+
+- [rails/rails#57156](https://github.com/rails/rails/pull/57156) — the PR that added `rails query` to Rails 8.2. Read this for the full design, rationale, and command surface.
+- [Kamal aliases](https://kamal-deploy.org) — for wiring `bin/kamal query` to `rails query` on deployed environments.
 
 ## Contributing
 
