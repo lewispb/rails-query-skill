@@ -15,80 +15,45 @@ description: |
 
 # rails-query
 
-`rails query` is a Rails 8.2+ command for running read-only queries against the database. Input is a single expression, output is a single JSON object, and writes are blocked at the connection level. With a read replica configured it hits the replica automatically, so it's safe to point at production.
+`rails query` is a Rails 8.2+ command for running read-only queries against the database. Input is a single expression, output is a single JSON object on stdout (`{columns, rows, meta}`; errors go to stderr with non-zero exit), and writes are blocked at the connection level. With a read replica configured it hits the replica automatically, so it's safe to point at production.
 
 Prefer it over a console, a script, or SSH for any data question. One invocation, structured output, nothing to clean up.
 
 ## The flow
 
-For any data question, work through these steps. Skip the ones you don't need — but don't skip step 3 when the schema might surprise you.
-
 ### 1. Know where you're running
 
-- **Local** (`bin/rails query`) — for development, tests, or anywhere you have the app checked out and a local DB.
-- **Remote via Kamal** (`bin/kamal query -d <destination>`) — when the app is deployed with Kamal. Requires a small alias in `config/deploy.yml` (see "Kamal setup" below).
+- **Local** (`bin/rails query`) — development, tests, or anywhere you have the app checked out.
+- **Remote via Kamal** (`bin/kamal query -d <destination>`) — when the app is deployed with Kamal. Requires a small alias in `config/deploy.yml` (see "Kamal setup").
 
-If you don't know whether Kamal is configured, check `config/deploy.yml` for an `aliases:` block. No alias → pass SSH or ask the user.
+If you don't know whether Kamal is configured, check `config/deploy.yml` for an `aliases:` block.
 
 ### 2. Decide: Ruby expression or raw SQL
 
-**Default: Ruby (ActiveRecord).** The expression is `eval`'d in the app context. Everything you'd type in a console works — scopes, associations, finders, aggregates. Model logic (encryption, default scopes, polymorphism) is honored.
+**Default: Ruby (ActiveRecord).** The expression is `eval`'d in the app context — scopes, associations, finders, aggregates all work. Model logic (encryption, default scopes, polymorphism) is honored.
 
-**`--sql`:** use for raw schema access, cross-table joins without models, or aggregates that are awkward to express in AR.
+**`--sql`:** raw schema access, cross-table joins without models, or aggregates awkward in AR.
 
-A telltale sign you forgot `--sql`: `SyntaxError: unexpected *; no anonymous rest parameter`. That means your SQL got parsed as Ruby. Add `--sql` and retry.
+Telltale sign you forgot `--sql`: `SyntaxError: unexpected *; no anonymous rest parameter` — your SQL got parsed as Ruby. Add `--sql` and retry.
 
 ### 3. Inspect the schema if it's unfamiliar
 
-When the app is new to you, or the table/column names are ambiguous, find out what's actually there before guessing.
-
-In-repo with source access, you can read `db/schema.rb` or model files directly. But `rails query` has three first-class introspection modes that work the same way locally and remotely — crucial when you only have Kamal access:
+`rails query` has three introspection modes that work the same locally and remotely — crucial when you only have Kamal access:
 
 ```bash
-# List every table
-bin/rails query schema
-
-# Full detail for a table: columns + indexes + enums + associations
-bin/rails query schema users
-
-# Every ActiveRecord model with its table and associations
-bin/rails query models
+bin/rails query schema           # every table
+bin/rails query schema users     # columns + indexes + enums + associations for one table
+bin/rails query models           # every AR model with its table and associations
 ```
 
 Enums matter: if a column is an enum, `User.where(status: "active")` works but `User.where(status: 0)` might silently misfire. `schema <table>` tells you.
 
-**For remote (Kamal) exploration, cache the schema locally before `jq`-ing it.** Each `bin/kamal query` round-trip is 10-30s (SSH + container exec + Rails boot), so re-running `bin/kamal query -d staging '"schema users"' | jq ...` three times across a task can cost you a minute of wall time for zero reason — the schema hasn't changed between calls.
-
-Dump once, read from disk many times:
-
-```bash
-# Pick a cache dir tied to the destination so different envs don't collide.
-CACHE=/tmp/rails-query-cache-staging
-mkdir -p "$CACHE"
-
-# Warm the cache — one round-trip per file.
-bin/kamal query -d staging '"schema"'       2>/dev/null > "$CACHE/tables.json"
-bin/kamal query -d staging '"models"'       2>/dev/null > "$CACHE/models.json"
-bin/kamal query -d staging '"schema users"' 2>/dev/null > "$CACHE/schema-users.json"
-
-# Now `jq` against the cache — zero network.
-jq '.columns[] | {name, type}' "$CACHE/schema-users.json"
-jq '[.rows[][0]] | length'     "$CACHE/tables.json"
-```
-
-Rules of thumb:
-
-- Skip caching for a single-query task. Caching is pure overhead when you only look once.
-- Cache is session-scoped. If a migration ships during your exploration, blow away `$CACHE` and re-dump.
-- Locally (`bin/rails query`), don't bother caching — there's no SSH overhead and it's already fast.
+**Over Kamal, cache the schema locally before `jq`-ing it** — each round-trip is 10-30s. Dump `schema` / `models` / `schema <table>` to `/tmp/rails-query-cache-<env>/` once, then `jq` against the files. Skip caching for single-query tasks or local runs.
 
 ### 4. For expensive queries, `EXPLAIN` first
 
 ```bash
-# Ruby relation
 bin/rails query explain 'User.where(active: true).order(:created_at).limit(100)'
-
-# Raw SQL
 bin/rails query explain 'SELECT * FROM users WHERE active = 1' --sql
 ```
 
@@ -101,21 +66,14 @@ bin/rails query 'User.count'
 bin/rails query --sql 'SELECT COUNT(*) FROM users'
 ```
 
-Watch for `"has_more": true` in the response — that means pagination is truncating. Re-run with `--page N` or raise `--per`. Don't add your own `LIMIT`; see "Pagination" below.
+Watch for `"has_more": true` in the response — pagination is truncating. Re-run with `--page N` or raise `--per`. Don't add your own `LIMIT`; see "Pagination".
 
 ### 6. Extract what you need
 
-The output is JSON on stdout. Pipe through `jq`:
-
 ```bash
-# Single scalar
-bin/rails query 'User.count' | jq '.rows[0][0]'
-
-# Column as an array
-bin/rails query 'User.pluck(:email)' | jq -r '.rows[][0]'
-
-# Pretty table
-bin/rails query 'User.limit(5).pluck(:id, :email)' | jq '.columns as $c | .rows[] | [$c, .] | transpose | map(join(": ")) | .[]'
+bin/rails query 'User.count' | jq '.rows[0][0]'                  # single scalar
+bin/rails query 'User.pluck(:email)' | jq -r '.rows[][0]'        # column as array
+COUNT=$(bin/rails query 'User.count' | jq -r '.rows[0][0]')      # into a shell var
 ```
 
 ## Command reference
@@ -143,60 +101,18 @@ bin/kamal query -d <destination> [OPTIONS] '<expression>' 2>/dev/null
 | `explain <expr>` | `EXPLAIN` plan. Pair with `--sql` for raw SQL |
 | `-` (or piped stdin) | Read expression from stdin — useful for long multi-line SQL |
 
-## Ruby return types and how they're shaped
-
-When the Ruby expression returns…
-
-| Return type | Output columns / rows |
-|-------------|-----------------------|
-| `ActiveRecord::Relation` | SQL is executed; paginated rows returned |
-| `ActiveRecord::Result` | Returned as-is |
-| `Hash` | Two columns: `key`, `value` |
-| `Array` | One column per element: `column_0`, `column_1`, … |
-| Anything else (integer, string, boolean) | Single `result` column with one row |
-
-## Output shape
-
-Every successful query returns one JSON object on stdout:
-
-```json
-{
-  "columns": ["id", "email"],
-  "rows": [[1, "alice@example.com"], [2, "bob@example.com"]],
-  "meta": {
-    "row_count": 2,
-    "query_time_ms": 3.4,
-    "page": 1,
-    "per_page": 100,
-    "has_more": false,
-    "sql": "SELECT id, email FROM users LIMIT 101"
-  }
-}
-```
-
-Errors are JSON on stderr with a non-zero exit:
-
-```json
-{"error": "ActiveRecord::StatementInvalid: ...", "meta": {"query_time_ms": 0}}
-```
-
 ## Pagination
 
 `rails query` paginates automatically. It internally appends `LIMIT per+1` to detect whether more rows exist, which drives `meta.has_more`.
 
-**Don't add your own `LIMIT`.** If the SQL already contains `LIMIT`, the command won't add one — which suppresses the truncation detector. For raw SQL queries, omit `LIMIT` and let pagination handle it.
-
-**To page through results:**
+**Don't add your own `LIMIT`.** If the SQL already contains `LIMIT`, the command won't add one — which suppresses the truncation detector. For raw SQL, omit `LIMIT` and let pagination handle it.
 
 ```bash
-bin/rails query --sql 'SELECT id, email FROM users ORDER BY id' --page 1
 bin/rails query --sql 'SELECT id, email FROM users ORDER BY id' --page 2
-
-# Or bump per-page (max 10000)
 bin/rails query --per 500 'User.order(:id)'
 ```
 
-Always order explicitly when paginating — without `ORDER BY`, page 2 can overlap page 1 depending on the engine.
+Always order explicitly when paginating — without `ORDER BY`, page 2 can overlap page 1.
 
 ## Kamal setup
 
@@ -204,15 +120,10 @@ If the app deploys with Kamal, add this to `config/deploy.yml`:
 
 ```yaml
 aliases:
+  # -q: quiet (only JSON on stdout); --reuse: use running container; -p: pin to primary host
+  # (avoids duplicate output); -r console: run on the console role (should have replica access)
   query: 'app exec -q --reuse -p -r console "rails query"'
 ```
-
-What each flag does:
-
-- `-q` — quiet mode: only the query's JSON lands on stdout. Without it, Kamal prints SSH status lines that corrupt downstream `jq`.
-- `--reuse` — runs inside an existing container instead of booting a fresh one. Fast.
-- `-p` — pins to the primary host. A role spanning multiple hosts would otherwise emit duplicate JSON (one per host).
-- `-r console` — runs on the `console` role. Your `console` role should be configured with read-replica DB access so queries don't touch the writer.
 
 Then:
 
@@ -225,7 +136,7 @@ bin/kamal query -d production --sql 'SELECT COUNT(*) FROM users' 2>/dev/null
 
 ### The Kamal quoting rule
 
-When your expression contains shell metacharacters — especially `(`, `)`, `*`, `;`, `&`, `|`, `<`, `>` — the remote shell will eat a single layer of quoting. The argument passes through your local shell, Ruby arg parsing in Kamal, SSH, and finally `bash -c` on the remote host; one of those strips quotes.
+When your expression contains shell metacharacters — especially `(`, `)`, `*`, `;`, `&`, `|`, `<`, `>` — the remote shell eats a single layer of quoting. The argument passes through your local shell, Ruby arg parsing in Kamal, SSH, and finally `bash -c` on the remote host; one of those strips quotes.
 
 **The reliable pattern:** outer single quotes, inner double quotes.
 
@@ -236,95 +147,41 @@ bin/kamal query -d production '"User.where(active: true).count"'
 
 # FAILS — bash: -c: syntax error near unexpected token '('
 bin/kamal query -d production --sql 'SELECT COUNT(*) FROM users'
-bin/kamal query -d production --sql "SELECT COUNT(*) FROM users"
 ```
 
-For SQL containing single-quoted string literals, break out and re-enter the outer quote:
-
-```bash
-bin/kamal query -d production --sql '"SELECT id FROM users WHERE email = '"'"'alice@example.com'"'"'"'
-```
-
-…or switch to the Ruby form, which is usually cleaner:
+For SQL containing single-quoted string literals, prefer the Ruby form — usually cleaner than escaping:
 
 ```bash
 bin/kamal query -d production '"User.where(email: \"alice@example.com\").pick(:id)"'
 ```
 
-**Locally, single-layer quoting works as normal** — the nested-quote dance is purely a Kamal remoting artifact:
-
-```bash
-bin/rails query --sql 'SELECT COUNT(*) FROM users'
-```
+**Locally, single-layer quoting works normally** — the nested-quote dance is purely a Kamal remoting artifact.
 
 ## Common patterns
 
-### Counts and aggregates
-
 ```bash
-bin/rails query 'User.count'
+# Counts and aggregates
 bin/rails query 'User.where(active: true).count'
 bin/rails query 'User.group(:role).count'
-bin/rails query 'User.pick("COUNT(*), AVG(age), MIN(created_at)")'
-```
 
-### Lookups
-
-```bash
-bin/rails query 'User.find(123).as_json'
+# Lookups
 bin/rails query 'User.find_by(email: "alice@example.com")&.as_json'
-bin/rails query 'User.where(active: true).pluck(:id, :email, :created_at)'
-```
 
-### Joins and scopes
-
-Ruby form lets you reuse existing scopes and encryption without reimplementing them:
-
-```bash
+# Joins and scopes — Ruby form reuses existing scopes/encryption
 bin/rails query 'Post.published.joins(:author).where(authors: { verified: true }).count'
-```
 
-### Schema-first discovery
-
-```bash
-# What tables exist?
-bin/rails query schema | jq -r '.rows[][0]'
-
-# What columns on orders?
+# Schema-first discovery
 bin/rails query schema orders | jq '.columns[] | {name, type, null}'
-
-# Which models touch the accounts table?
 bin/rails query models | jq '.[] | select(.table_name == "accounts") | .model'
-```
-
-### Long SQL via stdin
-
-Locally (stdin doesn't forward cleanly through the Kamal alias as written):
-
-```bash
-bin/rails query --sql - <<'SQL'
-  SELECT u.id, u.email, COUNT(o.id) AS order_count
-  FROM users u
-  LEFT JOIN orders o ON o.user_id = u.id
-  WHERE u.created_at > '2024-01-01'
-  GROUP BY u.id, u.email
-  ORDER BY order_count DESC
-SQL
-```
-
-### Extracting a value into a shell variable
-
-```bash
-COUNT=$(bin/rails query 'User.count' | jq -r '.rows[0][0]')
 ```
 
 ## Safety model
 
-- Writes are blocked at the connection level. The command uses `while_preventing_writes` or (when configured) `connected_to(role: :reading)`. `INSERT` / `UPDATE` / `DELETE` — including via AR methods — raises instead of executing.
+- Writes are blocked at the connection level via `while_preventing_writes` or (when configured) `connected_to(role: :reading)`. `INSERT` / `UPDATE` / `DELETE` raises instead of executing.
 - With a read replica configured, queries hit the replica automatically.
-- `--db <name>` overrides the connection — useful for targeting a specific configured database (e.g. `--db primary_replica`, `--db analytics`).
+- `--db <name>` overrides the connection (e.g. `--db primary_replica`, `--db analytics`).
 
-This means you can safely run `rails query` against production without worrying about accidental mutations. If you see `ActiveRecord::ReadOnlyError`, that's the safety net firing — your query tried to write something. Rework the expression to be read-only.
+`ActiveRecord::ReadOnlyError` means the safety net fired — rework the expression to be read-only.
 
 ## Troubleshooting
 
@@ -332,7 +189,7 @@ This means you can safely run `rails query` against production without worrying 
 |---------|--------------|-----|
 | `SyntaxError: unexpected *` | SQL passed without `--sql` | Add `--sql` |
 | `bash: -c: syntax error near unexpected token '('` | Kamal path, single-layer quoting | Switch to `'"..."'` nested quotes |
-| `ActiveRecord::ReadOnlyError` | Expression tried to write | Rework to be read-only; `rails query` is read-only by design |
+| `ActiveRecord::ReadOnlyError` | Expression tried to write | Rework to be read-only |
 | Empty JSON or duplicated output over Kamal | Missing `-p` or `-q` in the alias | Add them to `config/deploy.yml` |
 | `LIMIT 101` in `meta.sql` unexpectedly | Default pagination probe | Expected — drives `meta.has_more` |
 | `has_more: true` but you wanted all rows | Default per-page hit | Raise `--per` (max 10000) or paginate with `--page` |
